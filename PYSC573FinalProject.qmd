@@ -1,0 +1,248 @@
+---
+title: "PSYC573 Final Project"
+format: html
+editor: visual
+---
+
+```{r}
+setwd("~/Desktop/USC/Schoolwork/PSYC573/Final Project/PSYC573")
+library(tidyverse)
+library(brms)
+library(readxl)
+library(rstatix)
+library(gghalves)
+library(lme4)
+library(sjPlot)
+library(bayesplot)
+
+myColors <- c("#fc7489", "#faa24b", "#f2da5a", "#b0d8b3", "#add8e6", "#d8bfd8", "#ffd1dc")
+twoColors <- c("#add8e6", "#faa24b")
+```
+
+```{r, include=FALSE}
+slash_clean <- function(dat) {
+    dat <- as.data.frame(dat)
+    n_slash <- str_count(dat[1,], "/") 
+    col_name <- c()
+    for (i in 0:n_slash) {
+      col_name <- c(col_name, paste("R",i, sep = ""))
+    }
+    dat[col_name] <- str_split_fixed(dat[,1], "/", n = n_slash+1)
+    dat <- dat[,-c(1,2)]
+    dat <- apply(dat, MARGIN = c(1,2), as.numeric)
+    dat <- as.data.frame(dat)
+    return(dat)
+  }
+```
+
+## Data
+
+```{r}
+prolific <- read_xlsx("prolificMainComps.xlsx")
+indvData <- read_xlsx("indvData.xlsx")
+
+prolific <- prolific %>% 
+  filter(Gender != "Prefer Not to Say") %>%
+  filter(Gender != "Non-Binary") %>%
+  filter(Race != "Prefer not to say") %>%
+  mutate(Race = if_else(Race ==  "Multiple races", "Other", Race)) %>%
+  mutate(RaceBinary = if_else(Race == "Caucasian/White" & Ethnicity == 2, "White Non-Hispanic", "Other")) 
+
+#bart <- read.csv("bart.csv", header = T)
+#cloudy <- read.csv("cloudy.csv", header = T)
+#sunny <- read.csv("sunny.csv", header = T)
+
+#bart <- subset(bart, bart$completed == 1)
+#cloudy <- subset(cloudy, cloudy$completed == 1)
+#sunny <- subset(sunny, sunny$completed == 1)
+```
+
+### Making BRMS Model
+
+Cleaning Individual Data
+
+```{r}
+#bart <- bart %>% select(subjectid, lstotaltrialexplosions, lstotalpumpcount)
+#cloudy <- cloudy %>% select(subjectid, lstotalend, lstotalfishingcount)
+#sunny <- cloudy %>% select(subjectid, lstotalend, lstotalfishingcount)
+
+#bartPAV <- as.vector(t(slash_clean(bart$lstotalpumpcount)))
+#bartPops <- as.vector(t(slash_clean(bart$lstotaltrialexplosions)))
+#cloudyPAV <- as.vector(t(slash_clean(cloudy$lstotalfishingcount)))
+#cloudyPops <- as.vector(t(slash_clean(cloudy$lstotalend)))
+#sunnyPAV <- as.vector(t(slash_clean(sunny$lstotalfishingcount)))
+#sunnyPops <- as.vector(t(slash_clean(sunny$lstotalend)))
+
+#indvData <- data.frame(PAV = c(bartPAV, cloudyPAV, sunnyPAV),
+#                       Pops = c(bartPops, cloudyPops, sunnyPops),
+#                       SubjectID = c(rep(bart$subjectid, each = 10), rep(cloudy$subjectid, each = 10), rep(sunny$subjectid, each = 10)),
+#                       BMRT = c(rep("BART", length(bartPAV)), rep("Cloudy", length(cloudyPAV)), rep("Sunny", length(sunnyPAV))),
+#                       Rep = rep(1:10, 896))
+
+#indvData <- indvData %>% mutate(across(c(SubjectID, BMRT), as.factor))
+```
+
+```{r}
+#censoredFit <- brm(
+# PAV | cens(Pops) ~ BMRT + Rep + (1 | SubjectID),
+#  data = indvData,
+#  family = poisson(), 
+#  prior = set_prior("student_t(3, 0, 2.5)", class = "b"),
+#  chains = 4, 
+#  iter = 16000, 
+#  warmup = 8000, 
+#  cores = 4 ,
+#  control = list(adapt_delta = 0.99, max_treedepth = 15)
+#)
+```
+
+```{r}
+#summary(censoredFit)
+#mcmc_areas(as.array(censoredFit), pars = c("b_BMRTCloudy", "b_BMRTSunny","b_Rep"))
+#pp_check(censoredFit, type = "hist")
+#pp_check(censoredFit, type = "dens_overlay")
+```
+
+```{r}
+#predictedPAV <- posterior_predict(censoredFit)
+#meanPredictedPAV <- apply(predictedPAV, 2, mean)
+```
+
+### Combining Data
+
+```{r}
+filtered_data <- indvData %>%
+  group_by(SubjectID) %>%
+  filter(n() == 30) %>%  
+  ungroup() 
+
+summaryData <- filtered_data %>%
+  group_by(SubjectID, BMRT) %>%
+  summarize(
+    MeanPAV = mean(PAV, na.rm = TRUE),
+    MeanHigherPAV = mean(pmax(PAV, EstimatedPAV), na.rm = TRUE),
+    PAVAdjusted = if(any(Pops == 0)) mean(PAV[Pops == 0], na.rm = TRUE) else mean(PAV)) 
+
+```
+
+```{r}
+prolificLong <- data.frame(SubjectID = rep(prolific$subjectid, 3),
+                           DOSPERT = rep(prolific$DOSPERT, 3),
+                           BNT = rep(prolific$BNT, 3),
+                           SNS = rep(prolific$SNT, 3),
+                           AOT = rep(prolific$AOT, 3),
+                           Age = rep(prolific$Age, 3),
+                           Gender = rep(prolific$Gender, 3),
+                           RaceBinary = rep(prolific$RaceBinary, 3)
+)
+
+allData <- merge(summaryData, prolificLong, by = "SubjectID")
+allData <- allData %>%
+  distinct(.keep_all = TRUE)
+
+allData <- allData %>%
+  mutate(across(where(is.character), as.factor))
+```
+
+## Analysis
+
+### Regression
+
+```{r}
+longData <- allData %>%
+  pivot_longer(
+    cols = c(MeanPAV, PAVAdjusted, MeanHigherPAV),
+    names_to = "Method",
+    values_to = "PAVValue"
+  ) %>%
+  mutate(
+    Method = case_when(
+      Method == "MeanPAV" ~ "Raw",
+      Method == "PAVAdjusted" ~ "Adjusted",
+      Method == "MeanHigherPAV" ~ "Censored"
+    )
+  )
+
+longData <- longData %>%
+  mutate(Method = factor(Method, levels = c("Raw", "Adjusted", "Censored")),
+         BMRT = factor(BMRT))
+
+```
+
+```{r}
+ggplot(data = longData, aes(x = Method, y = PAVValue, fill = Method)) +
+  facet_grid(~BMRT) +
+  geom_half_violin(trim = FALSE, side = "l", alpha = 0.8) +  
+  stat_summary(
+    fun = mean, 
+    geom = "point", 
+    shape = 23, 
+    size = 2, 
+    position = position_dodge(width = 0.8)
+  ) +
+  geom_text(
+    data = longData %>%
+      group_by(BMRT, Method) %>%
+      summarize(Mean = mean(PAVValue), .groups = "drop_last"),
+    aes(x = Method, y = 0, label = round(Mean, 2)), 
+    vjust = 1.5, 
+    size = 3, 
+    position = position_dodge(width = 0.8)
+  ) +
+  theme_minimal() + 
+  ylim(0, 32) +
+  scale_fill_manual(values = myColors) +  
+  theme(
+    axis.text.x = element_blank(), 
+    axis.title.x = element_blank(), 
+    axis.ticks.x = element_blank(), 
+    axis.line.x = element_blank(),
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    title = "Average Number of Primary Actions by BMRT",
+    x = NULL,
+    y = "Average Number of Primary Actions",
+    fill = "Method"
+  )
+
+
+
+```
+
+### Correlations
+
+```{r}
+rawCor <- allData %>% select(MeanPAV, DOSPERT, BNT, SNS, AOT)
+adjustedCor <- allData %>% select(PAVAdjusted, DOSPERT, BNT, SNS, AOT)
+censoredCor <- allData %>% select(MeanHigherPAV, DOSPERT, BNT, SNS, AOT)
+
+round(cor(rawCor), 2)
+round(cor(adjustedCor), 2)
+round(cor(censoredCor), 2)
+```
+
+### Regressions
+
+```{r}
+allDataScaled <- allData %>%
+  mutate(across(c(MeanPAV, MeanHigherPAV, PAVAdjusted, DOSPERT, BNT, SNS, AOT, Age), scale))
+
+control <- lmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))
+```
+
+```{r}
+rawRegression <- lm(DOSPERT ~   MeanPAV , data = allData)
+adjustedRegression <- lm(DOSPERT ~ PAVAdjusted , data = allData)
+censoredegression <- lm(DOSPERT ~  MeanHigherPAV , data = allData)
+
+tab_model(rawRegression, adjustedRegression, censoredegression)
+```
+
+```{r}
+rawMixedRegression <- lmer(DOSPERT ~ MeanPAV + (1 | BMRT), data = allDataScaled)
+adjustedMixedRegression <- lmer(DOSPERT ~ PAVAdjusted + (1 | BMRT), data = allDataScaled)
+censoredMixedRegression <- lmer(DOSPERT ~ MeanHigherPAV + (1 | BMRT), data = allDataScaled)
+
+tab_model(rawMixedRegression, adjustedMixedRegression, censoredMixedRegression)
+```

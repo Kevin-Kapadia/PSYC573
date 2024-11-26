@@ -1,0 +1,107 @@
+---
+title: "hw8"
+format: pdf
+editor: visual
+author: Kevin Kapadia
+---
+
+```{r, include=FALSE, message=FALSE, warning=FALSE}
+setwd("~/Desktop/USC/Schoolwork/PSYC573/Final Project/PSYC573")
+library(tidyverse)
+library(brms)
+library(readxl)
+library(rstatix)
+library(gghalves)
+library(lme4)
+library(sjPlot)
+library(bayesplot)
+
+myColors <- c("#fc7489", "#faa24b", "#f2da5a", "#b0d8b3", "#add8e6", "#d8bfd8", "#ffd1dc")
+twoColors <- c("#add8e6", "#faa24b")
+indvData <- read_xlsx("indvData.xlsx")
+
+```
+
+
+
+### Author Information
+
+Kevin Kapadia 11/26/24
+
+### Research Question
+
+Can a Bayesian regression method for censored data improve the internal and external validity of behavioral measures of risk taking?
+
+### Description of Variables
+
+PAV: Primary Action Variable, number of times participants engaged in action during trial
+Pops: 1 = participant was penalized on that trial, 0 = participant was not penalized on that trial
+SubjectID: Factor variable with IDs of subject as levels
+BMRT: Factor variable with which behavioral measure of risk taking participant was taking
+Rep: Number of trials participant started for a given BMRT condition 
+
+### Mathematical Expression of Model and Priors
+
+$$
+PAV \mid \text{cens(Pops)} \sim \text{Poisson}(\lambda),
+$$
+
+$$
+\log(\lambda) = \beta_0 + \beta_1 \cdot \text{BMRT} + \beta_2 \cdot \text{Rep} + u_{\text{SubjectID}},
+$$
+
+$$
+u_{\text{SubjectID}} \sim \mathcal{N}(0, \sigma^2),
+$$
+
+### Code for Bayesian Analysis 
+
+Below is the code. We used 4 chains with 16,000 iterations (8,000 warm up) and 4 cores.  
+
+
+
+```{r}
+censoredFit <- brm(
+  PAV | cens(Pops) ~ BMRT + Rep + (1 | SubjectID),
+  data = indvData,
+  family = poisson(), 
+  prior = set_prior("student_t(3, 0, 2.5)", class = "b"),
+  chains = 4, 
+  iter = 16000, 
+  warmup = 8000, 
+  cores = 4 ,
+  control = list(adapt_delta = 0.99, max_treedepth = 15)
+)
+```
+
+
+
+### Convergence Check of MCMC
+
+
+
+```{r, echo=FALSE, message=FALSE}
+summary(censoredFit)
+```
+
+
+
+The R hat values are close to 1 and all ESS values are above 400. 
+
+### Posterior Distribution of Model Parameters
+
+
+
+```{r, echo=FALSE, message=FALSE}
+mcmc_areas(as.array(censoredFit), pars = c("b_BMRTCloudy", "b_BMRTSunny","b_Rep"))
+```
+
+
+
+All posterior distributions are symmetric and bell shaped. 
+
+### Interpretation of Results 
+
+Based on the results from the Bayesian censored regression we were successfully able to predict the number of actions participants would have taken if they had not been censored in their responses. This method shows participants increase their PAV across all 3 BMRT on average. Additionally, the transformed data correlate better with external measures of risk taking compared to the raw data.  
+
+
